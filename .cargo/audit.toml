@@ -1,0 +1,37 @@
+# cargo-audit ignore policy.
+#
+# Per docs/vault-design.md and the consensus plan: every ignored advisory here
+# must be justified (why it can't be fixed by a direct version bump) and
+# dated for review (a marker to re-check, not a tool-enforced expiry —
+# cargo-audit's `[advisories] ignore` has no expiry semantics of its own).
+#
+# History (2026-08-02): an earlier draft of this file ignored 9 advisories
+# attributed to `solana-program-test` (via `solana-runtime`/
+# `agave-precompiles`/`solana-syscalls`), on the assumption that crate would
+# be a dev-dependency of `clients/rust`. That plan was superseded during
+# Step 3 execution -- `solana-program-test` was evaluated and rejected in
+# favor of mollusk-svm (see `clients/rust/Cargo.toml`'s dependency comment
+# for the exact upstream wincode-0.5/0.6 incompatibility that motivated it),
+# so it was never actually added, and none of those 9 advisories' crates
+# appear anywhere in this workspace's `Cargo.lock`.
+#
+# Re-verified 2026-08-02 with `cargo audit` (cargo-audit 0.22.2, advisory-db
+# loaded same day): 448 crate dependencies scanned, zero *vulnerabilities*
+# found. Four *unmaintained*-crate warnings remain (bincode 1.3.3 /
+# RUSTSEC-2025-0141, derivative 2.2.0 / RUSTSEC-2024-0388, libsecp256k1 0.7.2 /
+# RUSTSEC-2025-0161, paste 1.0.15 / RUSTSEC-2024-0436), all transitive via
+# mollusk-svm's own Agave dependency chain, not something fixable from this
+# workspace. These are informational only -- cargo-audit exits 0 for warnings,
+# only vulnerabilities are blocking -- so no `ignore` entry is needed for CI
+# to stay green; listed here so a future re-run isn't surprised by them.
+#
+# The stale 9-entry ignore list has been removed rather than left in place,
+# since an ignore entry for an advisory that cannot occur is not a real
+# ignore decision -- it is dead configuration that would silently mask a
+# genuinely new advisory reusing a coincidentally similar-looking crate name.
+#
+# Review date: re-run `cargo audit` (no ignores expected to be needed) after
+# any `solana-sdk`/`mollusk-svm`/`spl-token-2022` version bump.
+
+[advisories]
+ignore = []

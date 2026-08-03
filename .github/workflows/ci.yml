@@ -1,0 +1,113 @@
+name: CI
+
+# Always-blocking checks (consensus plan Step 10). E2E is deliberately NOT
+# here -- pre-mortem #8 (validator-startup flake) puts it on its own cadence
+# in e2e.yml (PR-path-triggered + nightly), not unconditional per-PR.
+#
+# NOTE: this workflow file alone does not block merges -- that additionally
+# requires GitHub branch-protection configured to require these checks
+# (a repo setting, not a workflow-file property; see README).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  SOLANA_VERSION: '4.1.1'
+  RUST_TOOLCHAIN: '1.97.1'
+
+jobs:
+  build-and-test:
+    name: Build, test, clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - run: pnpm install --frozen-lockfile
+
+      # `cargo tree`'s exit-code semantics: `grep -qi` exits 0 (match found)
+      # / 1 (no match). `!` inverts it, so this step exits 0 only when
+      # Anchor is genuinely absent from the full dependency graph, including
+      # build/dev dependencies (acceptance criterion, corrected per pass-3).
+      - name: No Anchor anywhere in the dependency graph
+        run: '! cargo tree --workspace --edges all | grep -qi anchor'
+
+      - name: Build program (cargo build-sbf)
+        run: pnpm programs:build
+
+      - name: Test program (cargo test-sbf)
+        run: pnpm programs:test
+
+      # Host-only, `--release` specifically (a debug build has
+      # overflow-checks on by default regardless of our profile setting, so
+      # it would prove nothing) -- see the test file's module doc.
+      - name: Overflow-checks behavioral test (release profile)
+        run: cargo test --release --manifest-path programs/pinocchio-vault/Cargo.toml --test overflow_checks
+
+      - name: Clippy (program)
+        run: pnpm programs:lint -- -D warnings
+
+      - name: Clippy (Rust client)
+        run: pnpm clients:rust:lint -- -D warnings
+
+      - name: Test Rust client (mollusk-svm unit + integration-flow tests)
+        run: pnpm clients:rust:test
+
+      # clients/js is a standalone pnpm project (its own lockfile, not a
+      # root pnpm workspace member), so it needs its own install.
+      - name: Install JS client dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: clients/js
+
+      - name: Lint JS client
+        run: pnpm clients:js:lint
+
+      # Type-check/build only -- `pnpm clients:js:test` needs a live
+      # solana-test-validator + deployed program, which is the E2E layer
+      # (e2e.yml), not this always-blocking job (pre-mortem #8).
+      - name: Build JS client
+        run: pnpm --dir clients/js build
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-audit --locked
+      # Blocking against .cargo/audit.toml -- see that file for the current
+      # ignore policy (empty as of 2026-08-02; genuinely no ignores needed).
+      - run: cargo audit
+
+  semgrep:
+    name: Semgrep (named security-scanner fallback)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run checked-in Solana-vault ruleset
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: .semgrep/solana-vault.yml

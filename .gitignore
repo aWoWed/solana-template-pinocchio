@@ -1,0 +1,12 @@
+.anchor
+.DS_Store
+**/.DS_Store
+**/target
+**/*.rs.bk
+node_modules
+test-ledger
+dist
+
+# .cargo/audit.toml is checked-in project config (cargo-audit's ignore
+# policy) — nothing cache-like lives under .cargo/ for this project, so it is
+# not blanket-ignored the way the scaffold default assumed.

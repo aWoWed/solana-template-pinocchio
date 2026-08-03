@@ -1,0 +1,73 @@
+[package]
+name = "pinocchio-vault-client"
+version = "0.0.0"
+description = "A generated Rust client for the pinocchio-vault program"
+edition = "2024"
+readme = "README.md"
+license-file = "../../LICENSE"
+publish = false
+
+# The scaffold ships an optional `anchor` feature here. It is removed on
+# purpose: this template's acceptance criteria require
+# `cargo tree --workspace --edges all` to contain no Anchor at all, and
+# `anchor-lang` also pins `solana-program 1.16`, which cannot co-resolve with
+# the 4.1 toolchain the rest of the workspace uses.
+[features]
+test-sbf = []
+serde = ["dep:serde", "dep:serde_with"]
+
+# Codama renders against the granular `solana-*` crates, not the `solana-program`
+# umbrella — `src/generated/` contains no `solana_program::` path at all, so the
+# umbrella crate is not a dependency of this client.
+[dependencies]
+borsh = "^1.5"
+# 0.3 triggers clippy's `non_local_definitions` lint under `-D warnings` (the
+# `FromPrimitive` derive expands to an `impl` inside an anonymous `const _`
+# block) -- fixed upstream in 0.4, not fixable from this crate's own code
+# since `errors/pinocchio_vault.rs` is Codama-generated.
+num-derive = "^0.4"
+num-traits = "^0.2"
+serde = { version = "^1.0", features = ["derive"], optional = true }
+serde_with = { version = "^3.0", optional = true }
+solana-account-info = "^3.0"
+solana-cpi = "^3.0"
+solana-instruction = "^3.0"
+solana-program-error = "^3.0"
+solana-pubkey = { version = "^4.0", features = ["borsh", "sha2"] }
+thiserror = "^1.0"
+
+[dev-dependencies]
+# NOT `solana-program-test`: verified (2026-08-01) that `solana-program-test
+# ~4.1`'s own transitive graph is internally inconsistent in this Agave 4.1.2
+# release — `agave-bls-cert-verify` pulls `wincode 0.5.5` while
+# `solana-address 2.7.0` (pulled by our own regular dependencies below) needs
+# `wincode ^0.6`, and the two ranges cannot co-resolve
+# (`solana-transaction-status-client-types`'s `SchemaWrite` derive fails
+# against the wrong `wincode` trait version — 11 compile errors, not a
+# feature-flag issue). This is upstream, not fixable from this workspace; see
+# `cargo tree -i wincode` for the two independent chains. Since the consensus
+# plan's actual intended primary test harness was always mollusk-svm (faster,
+# no full Bank/AccountsDB, and — confirmed here — it avoids this whole
+# dependency subtree), that is what this template uses instead.
+mollusk-svm = "0.14"
+mollusk-svm-programs-token-2022 = "0.14"
+solana-sdk = "~4.1"
+# `solana-sdk` 4.x no longer re-exports `system_program` at all (verified —
+# zero matches for it anywhere in solana-sdk 4.1.0's own source); the System
+# Program's ID lives here instead in the post-crate-split ecosystem.
+solana-system-interface = "3.3"
+# 10.x is the last line that speaks `solana-pubkey`; 11.x switched to
+# `solana-address`, which would not interoperate with the `Pubkey` type Codama
+# renders into `src/generated/`.
+spl-token-2022 = { version = "10.0", features = ["no-entrypoint"] }
+
+# `src/generated/` ships optional Anchor interop and RPC-fetch helpers that this
+# template deliberately never enables. `anchor` is excluded on principle (no
+# Anchor anywhere in `cargo tree`); `fetch` is excluded because `solana-client`
+# pulls `solana-pubkey` 4.x, whose `solana-address` 2.7 requires `wincode` 0.6,
+# and (per the note above) at least one other Agave 4.1.2 crate still needs
+# `wincode` 0.5 — the two cannot co-resolve. Declaring the cfg names keeps
+# these intentional opt-outs from warning on every build.
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(feature, values("anchor", "anchor-idl-build", "fetch"))']

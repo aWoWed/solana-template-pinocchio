@@ -1,0 +1,79 @@
+name: E2E
+
+# Resolved cadence (consensus plan Step 9/10, pre-mortem #8): PR-triggered
+# only on paths that can actually affect an on-chain flow, plus a nightly
+# scheduled run -- not unconditional on every PR, since solana-test-validator
+# startup flake under CI resource contention is a real, unresolved risk that
+# readiness polling alone does not eliminate. This is intentionally a
+# separate, non-blocking-by-default check from ci.yml.
+on:
+  pull_request:
+    paths:
+      - 'programs/**'
+      - 'clients/**'
+      - 'fixtures/**'
+      - '.github/workflows/e2e.yml'
+  schedule:
+    - cron: '0 6 * * *' # Nightly, 06:00 UTC.
+  workflow_dispatch: {}
+
+env:
+  SOLANA_VERSION: '4.1.1'
+  RUST_TOOLCHAIN: '1.97.1'
+
+jobs:
+  e2e:
+    name: E2E (solana-test-validator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.1.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build program
+        run: pnpm programs:build
+
+      # `scripts/start-validator.mjs` polls the validator's health RPC in a
+      # retry loop with a timeout rather than a fixed sleep (pre-mortem #8),
+      # so this step fails fast and loud instead of racing a not-yet-ready
+      # validator.
+      - name: Start local validator
+        run: pnpm validator:start
+
+      # Note: `pnpm clients:rust:test` (mollusk-svm) never talks to this
+      # validator -- it's a pure host-VM simulation, already covered as a
+      # host-only check in ci.yml. The JS client's `ava` tests are the only
+      # suite in this repo that actually exercises a live
+      # solana-test-validator (see clients/js/test/_setup.ts).
+      - name: JS client install
+        run: pnpm install --frozen-lockfile
+        working-directory: clients/js
+
+      - name: JS client E2E (against local validator)
+        run: pnpm clients:js:test
+        working-directory: clients/js
+
+      - name: Stop local validator
+        if: always()
+        run: pnpm validator:stop

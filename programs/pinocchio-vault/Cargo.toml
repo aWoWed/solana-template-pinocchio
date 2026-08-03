@@ -1,0 +1,73 @@
+[package]
+name = "pinocchio-vault"
+version = "0.0.0"
+edition = "2024"
+readme = "./README.md"
+license-file = "../../LICENSE"
+publish = false
+
+[package.metadata.solana]
+program-id = "C5PLDoGR9PXmSc7XZap8Sbp3HCALViQAkQmEVG9HfYQ2"
+# SPL Token-2022. `solana-test-validator` preloads it, but `solana-program-test`
+# (the `cargo test-sbf` harness) does not, so the real mainnet binary is dumped
+# into `target/deploy` and loaded explicitly — the vault CPIs into it, and
+# testing against a stub would not exercise the real extension layout.
+program-dependencies = ["TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"]
+account-dependencies = []
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+no-entrypoint = []
+test-sbf = []
+
+[dependencies]
+pinocchio = { version = "0.11.2", features = ["cpi"] }
+pinocchio-system = "0.6.1"
+pinocchio-token = "0.7.0"
+solana-program-log = "1.2"
+
+# `pinocchio` re-exports `solana-address` but only enables its `syscalls`
+# feature. Both `declare_id!` (lib.rs) and `Address::from_str_const`
+# (token2022.rs) are `#[cfg(feature = "decode")]`, so this crate has to ask for
+# `decode` itself — a host-target `cargo test` accidentally gets it via
+# `clients/rust`'s `solana-program`, but `cargo build-sbf` builds this crate
+# alone and would not.
+solana-address = { version = "2.0", features = ["decode"] }
+# Deliberately NO `shank` here — see docs/idl-generation-notes.md. `scripts/
+# generate-idls.mjs` keys off this dependency, and its absence is what selects
+# the single-IDL fallback for this crate.
+
+[dev-dependencies]
+serde_json = "1.0"
+
+# `Address::derive_program_address` (called from production code in
+# processor.rs, not just tests) checks each candidate address is off-curve,
+# which is a syscall on-chain; off-chain it needs the curve25519
+# implementation to run under `cargo test`. This is a dev-only dependency
+# because it is host-test-only, not because of any target-cfg subtlety — see
+# the note below `cargo build-sbf` MUST be run scoped to this crate's own
+# directory for the real reason a bare workspace-root invocation breaks.
+solana-address = { version = "2.0", features = ["curve25519"] }
+
+# BUILD NOTE: run `cargo build-sbf` from *this directory*
+# (`programs/pinocchio-vault/`), never from the workspace root. This is a
+# virtual-manifest workspace (no root `[package]`), so a root-invoked `cargo
+# build-sbf` builds every member — including `clients/rust`, a host-only
+# client crate — for the SBF target too. That pulls `clients/rust`'s
+# std-requiring dependency chain into the *same* target-scoped feature
+# resolution as this crate, and Cargo unifies features per (package,
+# version) within a shared target regardless of which crate requested them.
+# The concrete symptom: a single shared `solana-address` build ends up with
+# `std`-enabling features active, producing E0152 (duplicate `panic_impl`)
+# against `nostd_panic_handler!()` in entrypoint.rs — even though nothing in
+# *this* crate's own dependency graph asks for `std`. `scripts/program/*.mjs`
+# already scope per-program for this reason; do the same for any manual
+# `cargo build-sbf`/`cargo test-sbf` invocation.
+
+# `target_os = "solana"` is a real target off the standard list; without this,
+# every pinocchio entrypoint macro expansion warns under a host-target build.
+[lints.rust.unexpected_cfgs]
+level = "warn"
+check-cfg = ['cfg(target_os, values("solana"))']

@@ -1,0 +1,249 @@
+{
+  "$schema": "vault-vectors-v1",
+  "note": "Shared behavioral scenario fixtures for programs/pinocchio-vault, per docs/vault-design.md. This is the single source of truth for WHICH scenarios the Rust and JS/TS test suites must both cover, so scenario coverage cannot silently drift between the two language test suites. Exact instruction bytes/account pubkeys are not encoded here (PDAs and fresh keypairs are inherently per-test-run values in this program); each scenario instead names the setup and the expected outcome, and each language's test harness constructs the concrete instruction/accounts from that.",
+  "implementationStatus": "`Initialize`, `Deposit`, and `Withdraw` are all implemented. `Initialize` covers 1 happy path + 9 rejections. `Deposit`/`Withdraw` scenarios cover every checklist item applicable to each instruction (docs/security-checklist.md) plus boundary cases. Extension-rejection scenarios remain Initialize-only, since mint extension enforcement (§7) happens only there.",
+  "instructions": {
+    "Initialize": {
+      "tag": 0,
+      "accountCount": 6,
+      "accounts": ["owner", "vault_state", "vault_token_account", "mint", "token_program", "system_program"],
+      "scenarios": [
+        {
+          "name": "happy_path_initialize",
+          "description": "Owner initializes a vault over an extension-free Token-2022 mint. Vault state PDA and program-derived token account are both created; token account authority is the vault state PDA, never the owner.",
+          "setup": "default",
+          "expect": { "result": "success" }
+        },
+        {
+          "name": "rejects_wrong_account_count",
+          "description": "Fewer or more than the 6 required accounts are supplied.",
+          "checklistItem": 1,
+          "setup": "account_count != 6",
+          "expect": { "result": "error", "errorCode": 0, "errorName": "AccountCountMismatch" }
+        },
+        {
+          "name": "rejects_duplicate_accounts",
+          "description": "Two account slots that must differ (e.g. vault_state and vault_token_account) hold the same pubkey.",
+          "checklistItem": 2,
+          "setup": "any two account slots aliased",
+          "expect": { "result": "error", "errorCode": 1, "errorName": "DuplicateAccount" }
+        },
+        {
+          "name": "rejects_double_initialize",
+          "description": "Initialize is called again on a vault_state account whose account_init_flag is already 1. Checked FIRST, before any other logic (docs/vault-design.md §8 step 3), so this must fire even if every other input in the second call is otherwise valid.",
+          "checklistItem": 3,
+          "setup": "vault_state pre-initialized by a prior successful Initialize",
+          "expect": { "result": "error", "errorCode": 2, "errorName": "AlreadyInitialized" }
+        },
+        {
+          "name": "rejects_missing_signer",
+          "description": "owner account is not marked as a transaction signer.",
+          "checklistItem": 5,
+          "setup": "owner.is_signer == false",
+          "expect": { "result": "error", "errorCode": 4, "errorName": "MissingRequiredSignature" }
+        },
+        {
+          "name": "rejects_invalid_instruction_tag",
+          "description": "First byte of instruction data is not 0 (the only tag Initialize's build accepts today -- 1/2 are reserved for Deposit/Withdraw and not yet wired).",
+          "checklistItem": 6,
+          "setup": "instruction_data[0] not in {0}",
+          "expect": { "result": "error", "errorCode": 5, "errorName": "InvalidInstructionTag" }
+        },
+        {
+          "name": "rejects_deserialization_error",
+          "description": "Instruction tag is valid (0) but trailing bytes follow it -- Initialize takes no arguments, so any extra data is malformed. Distinct from an invalid tag: this proves the tag check runs BEFORE this check, not that this check doesn't exist.",
+          "setup": "instruction_data == [0, ...extra_bytes]",
+          "expect": { "result": "error", "errorCode": 12, "errorName": "DeserializationError" }
+        },
+        {
+          "name": "rejects_mint_not_owned_by_token_2022",
+          "description": "mint account's owner is not the Token-2022 program (e.g. a legacy SPL Token mint, or an arbitrary account).",
+          "setup": "mint.owner != TOKEN_2022_ID",
+          "expect": { "result": "error", "errorCode": 13, "errorName": "InvalidMint" }
+        },
+        {
+          "name": "rejects_unsupported_mint_extension",
+          "description": "mint carries any initialized Token-2022 extension TLV entry. docs/vault-design.md §7's accepted-extension set is empty in v1 (default-reject posture), enforced today as one blanket rule in token2022.rs rather than 6 separate per-extension checks -- this is one representative scenario, not 6; the per-extension test names in docs/security-checklist.md are Step 6 work once per-extension handling (if any) is actually implemented, not before.",
+          "setup": "mint has >=1 initialized TLV extension entry (any type)",
+          "expect": { "result": "error", "errorCode": 6, "errorName": "UnsupportedMintExtension" }
+        },
+        {
+          "name": "rejects_forged_token_program",
+          "description": "token_program account passed is not the hardcoded Token-2022 program ID.",
+          "checklistItem": 11,
+          "setup": "token_program != TOKEN_2022_ID",
+          "expect": { "result": "error", "errorCode": 11, "errorName": "InvalidCpiTarget" }
+        },
+        {
+          "name": "rejects_forged_system_program",
+          "description": "system_program account passed is not the real System Program.",
+          "checklistItem": 11,
+          "setup": "system_program != SYSTEM_PROGRAM_ID",
+          "expect": { "result": "error", "errorCode": 11, "errorName": "InvalidCpiTarget" }
+        }
+      ]
+    },
+    "Deposit": {
+      "tag": 1,
+      "accountCount": 6,
+      "accounts": ["depositor", "vault_state", "vault_token_account", "depositor_token_account", "mint", "token_program"],
+      "scenarios": [
+        {
+          "name": "happy_path_deposit",
+          "description": "Any signer (not necessarily vault.owner -- deposits are permissionless top-ups) transfers amount from their own token account into the vault's program-derived token account.",
+          "setup": "default, depositor != vault owner, depositor_token_account funded with >= amount",
+          "expect": { "result": "success" }
+        },
+        {
+          "name": "rejects_wrong_account_count",
+          "checklistItem": 1,
+          "setup": "account_count != 6",
+          "expect": { "result": "error", "errorCode": 0, "errorName": "AccountCountMismatch" }
+        },
+        {
+          "name": "rejects_duplicate_accounts",
+          "checklistItem": 2,
+          "setup": "any two account slots aliased",
+          "expect": { "result": "error", "errorCode": 1, "errorName": "DuplicateAccount" }
+        },
+        {
+          "name": "rejects_wrong_state_owner",
+          "description": "vault_state account is not owned by this program (e.g. a System-owned or arbitrary account substituted in).",
+          "checklistItem": 4,
+          "setup": "vault_state.owner != program_id",
+          "expect": { "result": "error", "errorCode": 3, "errorName": "InvalidOwner" }
+        },
+        {
+          "name": "rejects_missing_signer",
+          "checklistItem": 5,
+          "setup": "depositor.is_signer == false",
+          "expect": { "result": "error", "errorCode": 4, "errorName": "MissingRequiredSignature" }
+        },
+        {
+          "name": "rejects_invalid_instruction_tag",
+          "checklistItem": 6,
+          "setup": "instruction_data[0] not in {0, 1, 2}",
+          "expect": { "result": "error", "errorCode": 5, "errorName": "InvalidInstructionTag" }
+        },
+        {
+          "name": "rejects_deserialization_error",
+          "description": "Tag is valid (1) but the remaining bytes are not exactly 8 (a well-formed little-endian u64). Distinct from an invalid tag: proves the tag check runs before this one.",
+          "setup": "instruction_data == [1, ...bytes] where len(bytes) != 8",
+          "expect": { "result": "error", "errorCode": 12, "errorName": "DeserializationError" }
+        },
+        {
+          "name": "rejects_substituted_token_account",
+          "description": "vault_token_account supplied does not equal the address re-derived from vault_state (Decision 4) -- e.g. a real Token-2022 account for the same mint but the wrong PDA.",
+          "checklistItem": 9,
+          "setup": "vault_token_account != re-derive([b\"vault_token\", vault_state], program_id)",
+          "expect": { "result": "error", "errorCode": 9, "errorName": "TokenAccountMismatch" }
+        },
+        {
+          "name": "rejects_forged_cpi_target",
+          "description": "token_program account passed is not the hardcoded Token-2022 program ID.",
+          "checklistItem": 11,
+          "setup": "token_program != TOKEN_2022_ID",
+          "expect": { "result": "error", "errorCode": 11, "errorName": "InvalidCpiTarget" }
+        },
+        {
+          "name": "boundary_zero_amount_deposit",
+          "description": "amount == 0 is a valid (no-op-value) transfer_checked call; Token-2022 accepts it and it must not be rejected by the vault program itself.",
+          "setup": "amount = 0",
+          "expect": { "result": "success" }
+        }
+      ]
+    },
+    "Withdraw": {
+      "tag": 2,
+      "accountCount": 6,
+      "accounts": ["owner", "vault_state", "vault_token_account", "destination_token_account", "mint", "token_program"],
+      "scenarios": [
+        {
+          "name": "happy_path_withdraw",
+          "description": "vault.owner withdraws amount <= the vault token account's real balance; CPI is invoke_signed by the vault state PDA using the stored bump, never the owner's own signature.",
+          "setup": "default, owner == vault.owner, vault_token_account.amount >= amount",
+          "expect": { "result": "success" }
+        },
+        {
+          "name": "rejects_wrong_account_count",
+          "checklistItem": 1,
+          "setup": "account_count != 6",
+          "expect": { "result": "error", "errorCode": 0, "errorName": "AccountCountMismatch" }
+        },
+        {
+          "name": "rejects_duplicate_accounts",
+          "checklistItem": 2,
+          "setup": "any two account slots aliased",
+          "expect": { "result": "error", "errorCode": 1, "errorName": "DuplicateAccount" }
+        },
+        {
+          "name": "rejects_wrong_state_owner",
+          "checklistItem": 4,
+          "setup": "vault_state.owner != program_id",
+          "expect": { "result": "error", "errorCode": 3, "errorName": "InvalidOwner" }
+        },
+        {
+          "name": "rejects_missing_signer",
+          "checklistItem": 5,
+          "setup": "owner.is_signer == false",
+          "expect": { "result": "error", "errorCode": 4, "errorName": "MissingRequiredSignature" }
+        },
+        {
+          "name": "rejects_invalid_instruction_tag",
+          "checklistItem": 6,
+          "setup": "instruction_data[0] not in {0, 1, 2}",
+          "expect": { "result": "error", "errorCode": 5, "errorName": "InvalidInstructionTag" }
+        },
+        {
+          "name": "rejects_deserialization_error",
+          "setup": "instruction_data == [2, ...bytes] where len(bytes) != 8",
+          "expect": { "result": "error", "errorCode": 12, "errorName": "DeserializationError" }
+        },
+        {
+          "name": "rejects_non_owner_withdraw",
+          "description": "A signer who is not vault.owner attempts Withdraw. Pre-mortem #1 -- the primary drain-the-vault attack this template exists to demonstrate defeating.",
+          "checklistItem": 7,
+          "setup": "owner (signer) != vault.owner",
+          "expect": { "result": "error", "errorCode": 7, "errorName": "NotVaultOwner" }
+        },
+        {
+          "name": "rejects_forged_bump",
+          "description": "vault_state supplied does not re-derive from [b\"vault\", owner_pubkey] + vault.bump -- simulates an attacker-influenced or stale account substituted for the real vault state PDA. The program only ever uses the *stored* bump for invoke_signed, never one from instruction data, so there is no separate 'forged instruction-data bump' path to test (pre-mortem #2, closed by construction).",
+          "checklistItem": 8,
+          "setup": "vault_state != re-derive([b\"vault\", owner], vault.bump, program_id)",
+          "expect": { "result": "error", "errorCode": 8, "errorName": "InvalidPda" }
+        },
+        {
+          "name": "rejects_substituted_token_account",
+          "checklistItem": 9,
+          "setup": "vault_token_account != re-derive([b\"vault_token\", vault_state], program_id)",
+          "expect": { "result": "error", "errorCode": 9, "errorName": "TokenAccountMismatch" }
+        },
+        {
+          "name": "rejects_overdraw",
+          "description": "amount > vault_token_account.amount (the token account's real on-chain balance, the single source of truth -- not a duplicated ledger in VaultState).",
+          "checklistItem": 10,
+          "setup": "amount > vault_token_account.amount",
+          "expect": { "result": "error", "errorCode": 10, "errorName": "InsufficientFunds" }
+        },
+        {
+          "name": "rejects_forged_cpi_target",
+          "checklistItem": 11,
+          "setup": "token_program != TOKEN_2022_ID",
+          "expect": { "result": "error", "errorCode": 11, "errorName": "InvalidCpiTarget" }
+        },
+        {
+          "name": "boundary_zero_amount_withdraw",
+          "setup": "amount = 0",
+          "expect": { "result": "success" }
+        },
+        {
+          "name": "boundary_max_u64_overdraw",
+          "description": "amount = u64::MAX against a vault token account with a small real balance -- must fail as an ordinary overdraw, not panic/overflow (checked comparison, not checked_sub on the requested amount itself).",
+          "setup": "amount = 18446744073709551615, vault_token_account.amount is small",
+          "expect": { "result": "error", "errorCode": 10, "errorName": "InsufficientFunds" }
+        }
+      ]
+    }
+  }
+}

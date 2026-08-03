@@ -1,0 +1,176 @@
+{
+  "version": "0.0.0",
+  "name": "pinocchio_vault",
+  "instructions": [
+    {
+      "name": "Initialize",
+      "accounts": [
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true,
+          "desc": "The vault's single owner (docs/vault-design.md §1). Pays for and controls the vault; the only signer ever authorized to withdraw."
+        },
+        {
+          "name": "vaultState",
+          "isMut": true,
+          "isSigner": false,
+          "desc": "Vault state PDA, seeds [b\"vault\", owner] (§3). Created by this instruction using the robust pre-funding-safe pattern (§10)."
+        },
+        {
+          "name": "vaultTokenAccount",
+          "isMut": true,
+          "isSigner": false,
+          "desc": "Program-derived Token-2022 token account, seeds [b\"vault_token\", vaultState] (§2/§3). Authority is vaultState, never the owner directly."
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "The Token-2022 mint this vault holds. Checked against the extension allow/deny list (§7) before the token account is created."
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "Must equal the hardcoded Token-2022 program ID (checklist item 11, InvalidCpiTarget) — never an attacker-supplied program ID."
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "Native System Program, used for the pre-funding-safe account creation pattern (§10)."
+        }
+      ],
+      "args": [],
+      "discriminant": { "type": "u8", "value": 0 }
+    },
+    {
+      "name": "Deposit",
+      "accounts": [
+        {
+          "name": "depositor",
+          "isMut": true,
+          "isSigner": true,
+          "desc": "Any signer may deposit (docs/vault-design.md §1) — deposits are permissionless top-ups, not owner-restricted."
+        },
+        {
+          "name": "vaultState",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "Vault state PDA, seeds [b\"vault\", owner] (§3). Must already be initialized and owned by this program."
+        },
+        {
+          "name": "vaultTokenAccount",
+          "isMut": true,
+          "isSigner": false,
+          "desc": "Program-derived Token-2022 token account, re-derived from vaultState and compared against the stored address (checklist item 9)."
+        },
+        {
+          "name": "depositorTokenAccount",
+          "isMut": true,
+          "isSigner": false,
+          "desc": "Depositor's own Token-2022 token account for the vault's mint; source of the transfer_checked CPI."
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "The Token-2022 mint this vault holds — used for transfer_checked's decimals check."
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "Must equal the hardcoded Token-2022 program ID (checklist item 11, InvalidCpiTarget)."
+        }
+      ],
+      "args": [{ "name": "amount", "type": "u64" }],
+      "discriminant": { "type": "u8", "value": 1 }
+    },
+    {
+      "name": "Withdraw",
+      "accounts": [
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true,
+          "desc": "Must equal vault_state.owner (checklist item 7, NotVaultOwner) — the one instruction this checklist item guards."
+        },
+        {
+          "name": "vaultState",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "Vault state PDA, seeds [b\"vault\", owner] (§3). Re-derived using the stored canonical bump, never a caller-supplied one (checklist item 8)."
+        },
+        {
+          "name": "vaultTokenAccount",
+          "isMut": true,
+          "isSigner": false,
+          "desc": "Program-derived Token-2022 token account. Authority is vaultState, so the withdraw CPI is invoke_signed by the program, never the human owner."
+        },
+        {
+          "name": "destinationTokenAccount",
+          "isMut": true,
+          "isSigner": false,
+          "desc": "Destination Token-2022 token account for the withdrawn funds; target of the transfer_checked CPI."
+        },
+        {
+          "name": "mint",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "The Token-2022 mint this vault holds — used for transfer_checked's decimals check."
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false,
+          "desc": "Must equal the hardcoded Token-2022 program ID (checklist item 11, InvalidCpiTarget)."
+        }
+      ],
+      "args": [{ "name": "amount", "type": "u64" }],
+      "discriminant": { "type": "u8", "value": 2 }
+    }
+  ],
+  "accounts": [
+    {
+      "name": "VaultState",
+      "desc": "docs/vault-design.md §4 — packed, little-endian, 107 bytes total.",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "accountInitFlag", "type": "u8" },
+          { "name": "owner", "type": "publicKey" },
+          { "name": "mint", "type": "publicKey" },
+          { "name": "tokenAccount", "type": "publicKey" },
+          { "name": "bump", "type": "u8" },
+          { "name": "tokenAccountBump", "type": "u8" },
+          { "name": "reserved", "type": { "array": ["u8", 8] } }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    { "code": 0, "name": "AccountCountMismatch", "msg": "Account count mismatch" },
+    { "code": 1, "name": "DuplicateAccount", "msg": "Duplicate or aliased account" },
+    { "code": 2, "name": "AlreadyInitialized", "msg": "Vault already initialized" },
+    { "code": 3, "name": "InvalidOwner", "msg": "Invalid account owner" },
+    { "code": 4, "name": "MissingRequiredSignature", "msg": "Missing required signature" },
+    { "code": 5, "name": "InvalidInstructionTag", "msg": "Invalid instruction tag" },
+    { "code": 6, "name": "UnsupportedMintExtension", "msg": "Unsupported Token-2022 mint extension" },
+    { "code": 7, "name": "NotVaultOwner", "msg": "Signer is not the vault owner" },
+    { "code": 8, "name": "InvalidPda", "msg": "Invalid PDA derivation" },
+    { "code": 9, "name": "TokenAccountMismatch", "msg": "Token account does not match the derived address" },
+    { "code": 10, "name": "InsufficientFunds", "msg": "Insufficient funds for withdrawal" },
+    { "code": 11, "name": "InvalidCpiTarget", "msg": "Invalid CPI target program" },
+    { "code": 12, "name": "DeserializationError", "msg": "Instruction data deserialization error" },
+    { "code": 13, "name": "InvalidMint", "msg": "Supplied mint is not a genuine Token-2022 mint" }
+  ],
+  "metadata": {
+    "address": "C5PLDoGR9PXmSc7XZap8Sbp3HCALViQAkQmEVG9HfYQ2",
+    "origin": "shank",
+    "binaryVersion": "0.4.2",
+    "libVersion": "0.4.2",
+    "note": "Hand-authored, not Shank-generated. See docs/idl-generation-notes.md: Shank's derives require std + Borsh; this no_std zero-copy Pinocchio crate cannot carry Shank annotations. This file is the checked-in source of truth instead, kept in sync with docs/vault-design.md by hand and re-addressed automatically by scripts/generate-idls.mjs on every run."
+  }
+}

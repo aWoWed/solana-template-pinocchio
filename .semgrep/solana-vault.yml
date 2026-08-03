@@ -1,0 +1,63 @@
+# Checked-in Semgrep ruleset -- named fallback for the CI security-scanner
+# gate (docs/security-checklist.md, consensus plan pre-mortem #7). Targets
+# the specific omission patterns this template's checklist cares about:
+# unverified CPI targets and placeholder/panic-prone code reaching a
+# security-sensitive program path. Not a substitute for a real Solana-aware
+# dataflow scanner (X-Ray, Radar) -- those were evaluated but not wired into
+# CI in this pass since their CI reliability against this exact toolchain
+# wasn't verified in this session; this ruleset is what's actually pinned and
+# running today. Run: `semgrep --config .semgrep/solana-vault.yml programs/`.
+rules:
+  - id: unverified-cpi-target
+    languages: [rust]
+    severity: ERROR
+    message: >
+      `invoke_with_unverified_program`/`invoke_signed_with_unverified_program`
+      skips the token-interface program-ID check (checklist item 11,
+      InvalidCpiTarget). Only call these after the target program ID has
+      already been verified in the same function -- prefer
+      `invoke_with_program`/`invoke_signed_with_program`, which verify it for
+      you.
+    patterns:
+      - pattern-either:
+          - pattern: $X.invoke_with_unverified_program(...)
+          - pattern: $X.invoke_signed_with_unverified_program(...)
+
+  - id: no-placeholder-code-in-program-src
+    languages: [rust]
+    severity: ERROR
+    paths:
+      include:
+        - "programs/**/src/**/*.rs"
+    message: >
+      Placeholder/panicking code (todo!/unimplemented!/panic! outside
+      #[cfg(test)]) must not reach a deployed program path -- it becomes an
+      unconditional instruction failure or, worse, a panic-based DoS for any
+      caller who reaches that branch.
+    pattern-either:
+      - pattern: todo!(...)
+      - pattern: unimplemented!(...)
+      - pattern: panic!(...)
+
+  - id: unwrap-or-expect-in-program-src
+    languages: [rust]
+    severity: WARNING
+    paths:
+      include:
+        - "programs/**/src/**/*.rs"
+    message: >
+      `.unwrap()`/`.expect(...)` in program source panics the whole
+      transaction on `None`/`Err` instead of returning a numbered
+      `VaultError` the caller (and this template's checklist tests) can
+      assert on. Prefer `?` with an explicit `VaultError` conversion, or
+      `.ok_or(VaultError::...)?` for `Option`.
+    patterns:
+      - pattern-either:
+          - pattern: $X.unwrap()
+          - pattern: $X.expect(...)
+      # `unsafe { &*(... as *const Self) }`-style zero-copy reinterprets in
+      # state.rs are a deliberate, reviewed pattern (LEN-checked immediately
+      # before), not a missing-error-handling omission -- excluded by path
+      # rather than by pattern, since `unsafe` blocks are inspected in the
+      # security checklist's manual-mutation-check pass, not this scanner.
+      - pattern-not-inside: unsafe { ... }

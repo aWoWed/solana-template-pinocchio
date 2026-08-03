@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["clients/rust", "programs/pinocchio-vault"]
+
+[workspace.metadata.cli]
+solana = "4.1.1"
+
+# Specify Rust toolchains for rustfmt, clippy, and build.
+# Any unprovided toolchains default to stable.
+[workspace.metadata.toolchains]
+format = "1.97.1"
+lint = "1.97.1"
+
+# Cargo only honours profile settings from the workspace root; the same keys in a
+# member crate's manifest are silently ignored.
+[profile.release]
+overflow-checks = true
